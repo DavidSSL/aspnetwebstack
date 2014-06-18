@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Contracts;
 using System.Runtime.Serialization;
 using System.Web.Http.OData.Builder;
+using System.Web.Http.OData.Extensions;
 using System.Web.Http.OData.Properties;
 using System.Web.Http.OData.Routing;
 using Microsoft.Data.Edm;
@@ -148,7 +149,8 @@ namespace System.Web.Http.OData.Formatter.Serialization
                 Actions = CreateODataActions(selectExpandNode.SelectedActions, entityInstanceContext)
             };
 
-            AddTypeNameAnnotationAsNeeded(entry, entityInstanceContext.EntitySet, entityInstanceContext.SerializerContext.MetadataLevel);
+            IEdmEntityType pathType = GetODataPathType(entityInstanceContext.SerializerContext);
+            AddTypeNameAnnotationAsNeeded(entry, pathType, entityInstanceContext.SerializerContext.MetadataLevel);
 
             if (entityInstanceContext.EntitySet != null)
             {
@@ -218,8 +220,6 @@ namespace System.Web.Http.OData.Formatter.Serialization
         {
             Contract.Assert(entityInstanceContext != null);
             Contract.Assert(writer != null);
-
-            ODataSerializerContext writeContext = entityInstanceContext.SerializerContext;
 
             IEdmNavigationProperty navigationProperty = navigationPropertyToExpand.Key;
             SelectExpandClause selectExpandClause = navigationPropertyToExpand.Value;
@@ -406,7 +406,7 @@ namespace System.Web.Http.OData.Formatter.Serialization
                 return null;
             }
 
-            Uri baseUri = new Uri(entityInstanceContext.Url.ODataLink(new MetadataPathSegment()));
+            Uri baseUri = new Uri(entityInstanceContext.Url.CreateODataLink(new MetadataPathSegment()));
             Uri metadata = new Uri(baseUri, "#" + CreateMetadataFragment(action, model, metadataLevel));
 
             ODataAction odataAction = new ODataAction
@@ -453,7 +453,29 @@ namespace System.Web.Http.OData.Formatter.Serialization
             return fragment;
         }
 
-        internal static void AddTypeNameAnnotationAsNeeded(ODataEntry entry, IEdmEntitySet entitySet,
+        private static IEdmEntityType GetODataPathType(ODataSerializerContext serializerContext)
+        {
+            Contract.Assert(serializerContext != null);
+            if (serializerContext.NavigationProperty != null)
+            {
+                // we are in an expanded navigation property. use the entityset to figure out the 
+                // type.
+                return serializerContext.EntitySet.ElementType;
+            }
+            else
+            {
+                // figure out the type from the path.
+                IEdmType edmType = serializerContext.Path.EdmType;
+                if (edmType.TypeKind == EdmTypeKind.Collection)
+                {
+                    edmType = (edmType as IEdmCollectionType).ElementType.Definition;
+                }
+
+                return edmType as IEdmEntityType;
+            }
+        }
+
+        internal static void AddTypeNameAnnotationAsNeeded(ODataEntry entry, IEdmEntityType odataPathType,
             ODataMetadataLevel metadataLevel)
         {
             // ODataLib normally has the caller decide whether or not to serialize properties by leaving properties
@@ -472,7 +494,7 @@ namespace System.Web.Http.OData.Formatter.Serialization
                 string typeName;
 
                 // Provide the type name to serialize (or null to force it not to serialize).
-                if (ShouldSuppressTypeNameSerialization(entry, entitySet, metadataLevel))
+                if (ShouldSuppressTypeNameSerialization(entry, odataPathType, metadataLevel))
                 {
                     typeName = null;
                 }
@@ -517,7 +539,7 @@ namespace System.Web.Http.OData.Formatter.Serialization
             }
         }
 
-        internal static bool ShouldSuppressTypeNameSerialization(ODataEntry entry, IEdmEntitySet entitySet,
+        internal static bool ShouldSuppressTypeNameSerialization(ODataEntry entry, IEdmEntityType edmType,
             ODataMetadataLevel metadataLevel)
         {
             Contract.Assert(entry != null);
@@ -532,27 +554,14 @@ namespace System.Web.Http.OData.Formatter.Serialization
                     return false;
                 case ODataMetadataLevel.MinimalMetadata:
                 default: // All values already specified; just keeping the compiler happy.
-                    string entitySetTypeName = GetElementTypeName(entitySet);
+                    string pathTypeName = null;
+                    if (edmType != null)
+                    {
+                        pathTypeName = edmType.FullName();
+                    }
                     string entryTypeName = entry.TypeName;
-                    return String.Equals(entryTypeName, entitySetTypeName, StringComparison.Ordinal);
+                    return String.Equals(entryTypeName, pathTypeName, StringComparison.Ordinal);
             }
-        }
-
-        private static string GetElementTypeName(IEdmEntitySet entitySet)
-        {
-            if (entitySet == null)
-            {
-                return null;
-            }
-
-            IEdmEntityType elementType = entitySet.ElementType;
-
-            if (elementType == null)
-            {
-                return null;
-            }
-
-            return elementType.FullName();
         }
 
         private IEdmEntityTypeReference GetEntityType(object graph, ODataSerializerContext writeContext)

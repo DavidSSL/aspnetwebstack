@@ -51,8 +51,94 @@ namespace System.Web.Http.Tracing.Tracers
             Assert.Equal(1, calls);
         }
 
+        [Theory]
+        [ReplaceCulture]
+        [InlineData(true, "The authentication filter successfully set a principal "
+                        + "to a known identity. Identity.Name='User'. "
+                        + "Identity.AuthenticationType='Basic'.")]
+        [InlineData(false, "The authentication filter set a principal to an unknown identity.")]
+        public void AuthenticateAsync_Traces(bool withIdentity, string expectedMessage)
+        {
+            // Arrange
+            CancellationToken cancellationToken = CreateCancellationToken();
+            Mock<IAuthenticationFilter> filterMock = new Mock<IAuthenticationFilter>();
+            filterMock.Setup(f => f.AuthenticateAsync(It.IsAny<HttpAuthenticationContext>(),
+                                                      It.IsAny<CancellationToken>()))
+                .Callback((HttpAuthenticationContext context,
+                           CancellationToken token) => context.Principal = CreateDummyPrincipal(withIdentity))
+                .Returns(Task.FromResult<object>(null));
+            IAuthenticationFilter filter = filterMock.Object;
+            TraceRecord record = null;
+            ITraceWriter tracer = CreateTracer((r) => { record = r; });
+            IAuthenticationFilter product = CreateProductUnderTest(filter, tracer);
+
+            using (HttpRequestMessage expectedRequest = CreateRequest())
+            {
+                HttpAuthenticationContext authenticationContext = CreateAuthenticationContext(expectedRequest,
+                                                                                              isPrincipalSet: false);
+
+                // Act
+                Task task = product.AuthenticateAsync(authenticationContext, cancellationToken);
+
+                // Assert
+                Assert.NotNull(task);
+                task.Wait();
+                Assert.NotNull(record);
+                Assert.Same(expectedRequest, record.Request);
+                Assert.Same(TraceCategories.FiltersCategory, record.Category);
+                Assert.Equal(TraceLevel.Info, record.Level);
+                Assert.Equal(TraceKind.End, record.Kind);
+                Assert.Equal(filter.GetType().Name, record.Operator);
+                Assert.Equal("AuthenticateAsync", record.Operation);
+                Assert.Null(record.Exception);
+                Assert.Equal(expectedMessage, record.Message);
+            }
+        }
+
         [Fact]
-        public void AuthenticateAsync_Traces()
+        [ReplaceCulture]
+        public void AuthenticateAsync_Traces_ErrorResult()
+        {
+            // Arrange
+            IHttpActionResult result = new AuthenticationFailureResult();
+            CancellationToken cancellationToken = CreateCancellationToken();
+            Mock<IAuthenticationFilter> filterMock = new Mock<IAuthenticationFilter>();
+            filterMock.Setup(f => f.AuthenticateAsync(It.IsAny<HttpAuthenticationContext>(),
+                                                      It.IsAny<CancellationToken>()))
+                .Callback((HttpAuthenticationContext context,
+                           CancellationToken token) => context.ErrorResult = result)
+                .Returns(Task.FromResult<object>(null));
+            TraceRecord record = null;
+            ITraceWriter tracer = CreateTracer((r) => { record = r; });
+            IAuthenticationFilter product = CreateProductUnderTest(filterMock.Object, tracer);
+            const string expectedMessage = "The authentication filter encountered an error. ErrorResult="
+                + "'System.Web.Http.Tracing.Tracers.AuthenticationFilterTracerTests+AuthenticationFailureResult'.";
+
+            using (HttpRequestMessage expectedRequest = CreateRequest())
+            {
+                HttpAuthenticationContext authenticationContext = CreateAuthenticationContext(expectedRequest);
+
+                // Act
+                Task task = product.AuthenticateAsync(authenticationContext, cancellationToken);
+
+                // Assert
+                Assert.NotNull(task);
+                task.Wait();
+                Assert.NotNull(record);
+                Assert.Same(expectedRequest, record.Request);
+                Assert.Same(TraceCategories.FiltersCategory, record.Category);
+                Assert.Equal(TraceLevel.Info, record.Level);
+                Assert.Equal(TraceKind.End, record.Kind);
+                Assert.Equal(filterMock.Object.GetType().Name, record.Operator);
+                Assert.Equal("AuthenticateAsync", record.Operation);
+                Assert.Null(record.Exception);
+                Assert.Equal(expectedMessage, record.Message);
+            }
+        }
+
+        [Fact]
+        [ReplaceCulture]
+        public void AuthenticateAsync_Traces_DidNothing()
         {
             // Arrange
             CancellationToken cancellationToken = CreateCancellationToken();
@@ -60,6 +146,7 @@ namespace System.Web.Http.Tracing.Tracers
             TraceRecord record = null;
             ITraceWriter tracer = CreateTracer((r) => { record = r; });
             IAuthenticationFilter product = CreateProductUnderTest(filter, tracer);
+            const string expectedMessage = "The authentication filter did not encounter an error or set a principal.";
 
             using (HttpRequestMessage expectedRequest = CreateRequest())
             {
@@ -79,7 +166,7 @@ namespace System.Web.Http.Tracing.Tracers
                 Assert.Equal(filter.GetType().Name, record.Operator);
                 Assert.Equal("AuthenticateAsync", record.Operation);
                 Assert.Null(record.Exception);
-                Assert.Null(record.Message);
+                Assert.Equal(expectedMessage, record.Message);
             }
         }
 
@@ -205,10 +292,11 @@ namespace System.Web.Http.Tracing.Tracers
             return new HttpAuthenticationContext(actionContext, principal);
         }
 
-        private static HttpAuthenticationContext CreateAuthenticationContext(HttpRequestMessage request)
+        private static HttpAuthenticationContext CreateAuthenticationContext(HttpRequestMessage request,
+                                                                             bool isPrincipalSet = true)
         {
             HttpActionContext actionContext = CreateActionContext(request);
-            IPrincipal principal = CreateDummyPrincipal();
+            IPrincipal principal = (isPrincipalSet) ? CreateDummyPrincipal() : null;
             return new HttpAuthenticationContext(actionContext, principal);
         }
 
@@ -241,9 +329,19 @@ namespace System.Web.Http.Tracing.Tracers
             return new Mock<IAuthenticationFilter>(MockBehavior.Strict).Object;
         }
 
-        private static IPrincipal CreateDummyPrincipal()
+        private static IPrincipal CreateDummyPrincipal(bool withIdentity = true)
         {
-            return new Mock<IPrincipal>(MockBehavior.Strict).Object;
+            var principalMock = new Mock<IPrincipal>(MockBehavior.Strict);
+            if (withIdentity)
+            {
+                principalMock.Setup(p => p.Identity.Name).Returns("User");
+                principalMock.Setup(p => p.Identity.AuthenticationType).Returns("Basic");
+            }
+            else
+            {
+                principalMock.Setup(p => p.Identity).Returns((IIdentity)null);
+            }
+            return principalMock.Object;
         }
 
         private static IHttpActionResult CreateDummyResult()
@@ -296,6 +394,14 @@ namespace System.Web.Http.Tracing.Tracers
                         trace.Invoke(record);
                     });
             return mock.Object;
+        }
+
+        private class AuthenticationFailureResult : IHttpActionResult
+        {
+            public Task<HttpResponseMessage> ExecuteAsync(CancellationToken cancellationToken)
+            {
+                throw new NotImplementedException();
+            }
         }
     }
 }

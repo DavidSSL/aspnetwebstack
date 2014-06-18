@@ -13,21 +13,21 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http.Controllers;
 using System.Web.Http.Dispatcher;
+using System.Web.Http.ExceptionHandling;
 using System.Web.Http.Filters;
-using System.Web.Http.Hosting;
+using System.Web.Http.Metadata;
 using System.Web.Http.ModelBinding;
 using System.Web.Http.Properties;
 using System.Web.Http.Results;
 using System.Web.Http.Routing;
+using System.Web.Http.Validation;
 using Newtonsoft.Json;
 
 namespace System.Web.Http
 {
     public abstract class ApiController : IHttpController, IDisposable
     {
-        private bool _disposed;
-        private ModelStateDictionary _modelState;
-        private HttpControllerContext _controllerContext;
+        private HttpActionContext _actionContext = new HttpActionContext();
         private bool _initialized;
 
         /// <summary>Gets the configuration.</summary>
@@ -44,16 +44,15 @@ namespace System.Web.Http
         {
             get
             {
-                // unit test only.
-                if (_controllerContext == null)
+                // unit test only
+                if (ActionContext.ControllerContext == null)
                 {
-                    _controllerContext = new HttpControllerContext
+                    ActionContext.ControllerContext = new HttpControllerContext
                     {
                         RequestContext = new RequestBackedHttpRequestContext()
                     };
                 }
-
-                return _controllerContext;
+                return ActionContext.ControllerContext;
             }
             set
             {
@@ -62,7 +61,22 @@ namespace System.Web.Http
                     throw Error.PropertyNull();
                 }
 
-                _controllerContext = value;
+                ActionContext.ControllerContext = value;
+            }
+        }
+
+        /// <summary>Gets the action context.</summary>
+        /// <remarks>The setter is intended for unit testing purposes only.</remarks>
+        public HttpActionContext ActionContext
+        {
+            get { return _actionContext; }
+            set
+            {
+                if (value == null)
+                {
+                    throw Error.PropertyNull();
+                }
+                _actionContext = value;
             }
         }
 
@@ -74,18 +88,7 @@ namespace System.Web.Http
         {
             get
             {
-                if (_modelState == null)
-                {
-                    // The getter is not intended to be used by multiple threads, so it is fine to initialize here.
-                    _modelState = new ModelStateDictionary();
-                }
-
-                return _modelState;
-            }
-            internal set
-            {
-                Contract.Assert(value != null);
-                _modelState = value;
+                return ActionContext.ModelState;
             }
         }
 
@@ -197,14 +200,13 @@ namespace System.Web.Http
 
             HttpControllerDescriptor controllerDescriptor = controllerContext.ControllerDescriptor;
             ServicesContainer controllerServices = controllerDescriptor.Configuration.Services;
-            HttpActionDescriptor actionDescriptor = controllerServices.GetActionSelector().SelectAction(controllerContext);
 
+            HttpActionDescriptor actionDescriptor = controllerServices.GetActionSelector().SelectAction(controllerContext);
+            ActionContext.ActionDescriptor = actionDescriptor;
             if (Request != null)
             {
                 Request.SetActionDescriptor(actionDescriptor);
             }
-
-            HttpActionContext actionContext = new HttpActionContext(controllerContext, actionDescriptor);
 
             FilterGrouping filterGrouping = actionDescriptor.GetFilterGrouping();
 
@@ -213,18 +215,61 @@ namespace System.Web.Http
             IAuthorizationFilter[] authorizationFilters = filterGrouping.AuthorizationFilters;
             IExceptionFilter[] exceptionFilters = filterGrouping.ExceptionFilters;
 
-            IHttpActionResult result = new ActionFilterResult(actionDescriptor.ActionBinding, actionContext, this,
+            IHttpActionResult result = new ActionFilterResult(actionDescriptor.ActionBinding, ActionContext,
                 controllerServices, actionFilters);
             if (authorizationFilters.Length > 0)
             {
-                result = new AuthorizationFilterResult(actionContext, authorizationFilters, result);
+                result = new AuthorizationFilterResult(ActionContext, authorizationFilters, result);
             }
             if (authenticationFilters.Length > 0)
             {
-                result = new AuthenticationFilterResult(actionContext, this, authenticationFilters, result);
+                result = new AuthenticationFilterResult(ActionContext, this, authenticationFilters, result);
+            }
+            if (exceptionFilters.Length > 0)
+            {
+                IExceptionLogger exceptionLogger = ExceptionServices.GetLogger(controllerServices);
+                IExceptionHandler exceptionHandler = ExceptionServices.GetHandler(controllerServices);
+                result = new ExceptionFilterResult(ActionContext, exceptionFilters, exceptionLogger, exceptionHandler,
+                    result);
             }
 
-            return InvokeActionWithExceptionFilters(result, actionContext, cancellationToken, exceptionFilters);
+            return result.ExecuteAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Validates the given entity and adds the validation errors to the <see cref="ApiController.ModelState"/>
+        /// under the empty prefix, if any.
+        /// </summary>
+        /// <typeparam name="TEntity">The type of the entity to be validated.</typeparam>
+        /// <param name="entity">The entity being validated.</param>
+        public void Validate<TEntity>(TEntity entity)
+        {
+            Validate(entity, keyPrefix: String.Empty);
+        }
+
+        /// <summary>
+        /// Validates the given entity and adds the validation errors to the <see cref="ApiController.ModelState"/>, if any.
+        /// </summary>
+        /// <typeparam name="TEntity">The type of the entity to be validated.</typeparam>
+        /// <param name="entity">The entity being validated.</param>
+        /// <param name="keyPrefix">
+        /// The key prefix under which the model state errors would be added in the <see cref="ApiController.ModelState"/>.
+        /// </param>
+        public void Validate<TEntity>(TEntity entity, string keyPrefix)
+        {
+            if (Configuration == null)
+            {
+                throw Error.InvalidOperation(SRResources.TypePropertyMustNotBeNull, typeof(ApiController).Name, "Configuration");
+            }
+
+            IBodyModelValidator validator = Configuration.Services.GetBodyModelValidator();
+            if (validator != null)
+            {
+                ModelMetadataProvider metadataProvider = Configuration.Services.GetModelMetadataProvider();
+                Contract.Assert(metadataProvider != null, "GetModelMetadataProvider throws on null.");
+
+                validator.Validate(entity, typeof(TEntity), metadataProvider, ActionContext, keyPrefix);
+            }
         }
 
         /// <summary>Creates a <see cref="BadRequestResult"/> (400 Bad Request).</summary>
@@ -316,7 +361,9 @@ namespace System.Web.Http
         /// Creates a <see cref="CreatedNegotiatedContentResult{T}"/> (201 Created) with the specified values.
         /// </summary>
         /// <typeparam name="T">The type of content in the entity body.</typeparam>
-        /// <param name="location">The location at which the content has been created.</param>
+        /// <param name="location">
+        /// The location at which the content has been created. Must be a relative or absolute URL.
+        /// </param>
         /// <param name="content">The content value to negotiate and format in the entity body.</param>
         /// <returns>A <see cref="CreatedNegotiatedContentResult{T}"/> with the specified values.</returns>
         protected internal CreatedNegotiatedContentResult<T> Created<T>(string location, T content)
@@ -326,7 +373,7 @@ namespace System.Web.Http
                 throw new ArgumentNullException("location");
             }
 
-            return Created<T>(new Uri(location), content);
+            return Created<T>(new Uri(location, UriKind.RelativeOrAbsolute), content);
         }
 
         /// <summary>
@@ -527,47 +574,7 @@ namespace System.Web.Http
             }
 
             _initialized = true;
-            _controllerContext = controllerContext;
-        }
-
-        internal static async Task<HttpResponseMessage> InvokeActionWithExceptionFilters(IHttpActionResult innerResult,
-            HttpActionContext actionContext, CancellationToken cancellationToken, IExceptionFilter[] filters)
-        {
-            Contract.Assert(innerResult != null);
-            Contract.Assert(actionContext != null);
-            Contract.Assert(filters != null);
-
-            Exception exception = null;
-            try
-            {
-                return await innerResult.ExecuteAsync(cancellationToken);
-            }
-            catch (Exception e)
-            {
-                exception = e;
-            }
-
-            // This code path only runs if the task is faulted with an exception
-            Contract.Assert(exception != null);
-
-            HttpActionExecutedContext executedContext = new HttpActionExecutedContext(actionContext, exception);
-
-            // Note: exception filters need to be scheduled in the reverse order so that
-            // the more specific filter (e.g. Action) executes before the less specific ones (e.g. Global)
-            for (int i = filters.Length - 1; i >= 0; i--)
-            {
-                IExceptionFilter exceptionFilter = filters[i];
-                await exceptionFilter.ExecuteExceptionFilterAsync(executedContext, cancellationToken);
-            }
-
-            if (executedContext.Response != null)
-            {
-                return executedContext.Response;
-            }
-            else
-            {
-                throw executedContext.Exception;
-            }
+            ControllerContext = controllerContext;
         }
 
         #region IDisposable
@@ -580,14 +587,6 @@ namespace System.Web.Http
 
         protected virtual void Dispose(bool disposing)
         {
-            if (!_disposed)
-            {
-                _disposed = true;
-                if (disposing)
-                {
-                    // TODO: Dispose controller state
-                }
-            }
         }
 
         #endregion IDisposable

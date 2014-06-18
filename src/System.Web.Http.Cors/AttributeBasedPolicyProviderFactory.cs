@@ -46,6 +46,9 @@ namespace System.Web.Http.Cors
             if (corsRequestContext.IsPreflight)
             {
                 HttpRequestMessage targetRequest = new HttpRequestMessage(new HttpMethod(corsRequestContext.AccessControlRequestMethod), request.RequestUri);
+
+                request.RegisterForDispose(targetRequest);
+
                 try
                 {
                     foreach (var property in request.Properties)
@@ -82,13 +85,6 @@ namespace System.Web.Http.Cors
                         return DefaultPolicyProvider;
                     }
                     throw;
-                }
-                finally
-                {
-                    if (targetRequest != null)
-                    {
-                        request.RegisterForDispose(targetRequest);
-                    }
                 }
             }
             else
@@ -144,14 +140,12 @@ namespace System.Web.Http.Cors
                 };
             }
 
-            HttpControllerContext controllerContext = new HttpControllerContext
+            IHttpController controller = controllerDescriptor.CreateController(request);
+            using (controller as IDisposable)
             {
-                RequestContext = requestContext,
-                Request = request,
-                ControllerDescriptor = controllerDescriptor
-            };
-
-            return config.Services.GetActionSelector().SelectAction(controllerContext);
+                HttpControllerContext controllerContext = new HttpControllerContext(requestContext, request, controllerDescriptor, controller);
+                return config.Services.GetActionSelector().SelectAction(controllerContext);
+            }
         }
     }
 }

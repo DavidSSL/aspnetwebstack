@@ -61,23 +61,23 @@ namespace System.Web.Http.Dispatcher
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             // Lookup route data, or if not found as a request property then we look it up in the route table
-            IHttpRouteData routeData;
-            if (!request.TryGetRouteData(out routeData))
+            IHttpRouteData routeData = request.GetRouteData();
+            if (routeData == null)
             {
                 routeData = _configuration.Routes.GetRouteData(request);
-
                 if (routeData != null)
                 {
                     request.SetRouteData(routeData);
                 }
-                else
-                {
-                    request.Properties.Add(HttpPropertyKeys.NoRouteMatched, true);
-                    return TaskHelpers.FromResult(request.CreateErrorResponse(
-                        HttpStatusCode.NotFound,
-                        Error.Format(SRResources.ResourceNotFound, request.RequestUri),
-                        SRResources.NoRouteData));
-                }
+            }
+
+            if (routeData == null || (routeData.Route != null && routeData.Route.Handler is StopRoutingHandler))
+            {
+                request.Properties.Add(HttpPropertyKeys.NoRouteMatched, true);
+                return Task.FromResult(request.CreateErrorResponse(
+                    HttpStatusCode.NotFound,
+                    Error.Format(SRResources.ResourceNotFound, request.RequestUri),
+                    SRResources.NoRouteData));
             }
 
             routeData.RemoveOptionalRoutingParameters();

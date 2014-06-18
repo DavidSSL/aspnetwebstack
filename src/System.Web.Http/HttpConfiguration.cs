@@ -8,11 +8,9 @@ using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Formatting;
-using System.Threading;
 using System.Web.Http.Controllers;
 using System.Web.Http.Dependencies;
 using System.Web.Http.Filters;
-using System.Web.Http.Hosting;
 using System.Web.Http.Metadata;
 using System.Web.Http.ModelBinding;
 using System.Web.Http.Services;
@@ -28,7 +26,7 @@ namespace System.Web.Http
     {
         private readonly HttpRouteCollection _routes;
         private readonly ConcurrentDictionary<object, object> _properties = new ConcurrentDictionary<object, object>();
-        private readonly MediaTypeFormatterCollection _formatters = DefaultFormatters();
+        private readonly MediaTypeFormatterCollection _formatters;
         private readonly Collection<DelegatingHandler> _messageHandlers = new Collection<DelegatingHandler>();
         private readonly HttpFilterCollection _filters = new HttpFilterCollection();
 
@@ -36,7 +34,6 @@ namespace System.Web.Http
         private Action<HttpConfiguration> _initializer = DefaultInitializer;
         private bool _initialized;
 
-        private List<IDisposable> _resourcesToDispose = new List<IDisposable>();
         private bool _disposed;
 
         /// <summary>
@@ -61,6 +58,8 @@ namespace System.Web.Http
             }
 
             _routes = routes;
+            _formatters = DefaultFormatters(this);
+
             Services = new DefaultServices(this);
             ParameterBindingRules = DefaultActionValueBinder.GetDefaultParameterBinders();
         }
@@ -216,13 +215,13 @@ namespace System.Web.Http
             get { return _formatters; }
         }
 
-        private static MediaTypeFormatterCollection DefaultFormatters()
+        private static MediaTypeFormatterCollection DefaultFormatters(HttpConfiguration config)
         {
             var formatters = new MediaTypeFormatterCollection();
 
             // Basic FormUrlFormatter does not support binding to a T. 
             // Use our JQuery formatter instead.
-            formatters.Add(new JQueryMvcFormUrlEncodedFormatter());
+            formatters.Add(new JQueryMvcFormUrlEncodedFormatter(config));
 
             return formatters;
         }
@@ -268,20 +267,6 @@ namespace System.Web.Http
         }
 
         /// <summary>
-        /// Adds the given <paramref name="resource"/> to a list of resources that will be disposed once the configuration is disposed.
-        /// </summary>
-        /// <param name="resource">The resource to dispose. Can be <c>null</c>.</param>
-        internal void RegisterForDispose(IDisposable resource)
-        {
-            if (resource == null)
-            {
-                return;
-            }
-
-            _resourcesToDispose.Add(resource);
-        }
-
-        /// <summary>
         /// Invoke the Intializer hook. It is considered immutable from this point forward.
         /// It's safe to call this multiple times. 
         /// </summary>
@@ -306,16 +291,11 @@ namespace System.Web.Http
             if (!_disposed)
             {
                 _disposed = true;
+
                 if (disposing)
                 {
                     _routes.Dispose();
-                    Services.Dispose();
                     DependencyResolver.Dispose();
-
-                    foreach (IDisposable resource in _resourcesToDispose)
-                    {
-                        resource.Dispose();
-                    }
                 }
             }
         }

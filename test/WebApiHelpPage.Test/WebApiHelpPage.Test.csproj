@@ -9,7 +9,6 @@
     <OutputPath>..\..\bin\$(Configuration)\Test\</OutputPath>
     <DocumentationFile>$(OutputPath)$(AssemblyName).xml</DocumentationFile>
     <NoWarn>1591</NoWarn>
-    <SolutionDir Condition="$(SolutionDir) == '' Or $(SolutionDir) == '*Undefined*'">..\..\</SolutionDir>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Moq, Version=4.0.10827.0, Culture=neutral, PublicKeyToken=69f491c39445e920, processorArchitecture=MSIL">
@@ -21,9 +20,12 @@
       <HintPath>..\..\packages\Newtonsoft.Json.4.5.11\lib\net40\Newtonsoft.Json.dll</HintPath>
     </Reference>
     <Reference Include="System" />
+    <Reference Include="System.ComponentModel.DataAnnotations" />
+    <Reference Include="System.Configuration" />
     <Reference Include="System.Core" />
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Net.Http.WebRequest" />
+    <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Web" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
@@ -42,7 +44,9 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Controllers\UsersController.cs" />
     <Compile Include="Controllers\ValuesController.cs" />
+    <Compile Include="ModelDescriptionGeneratorTest.cs" />
     <Compile Include="Helpers\CustomTypes.cs" />
     <Compile Include="ObjectGeneratorTest.cs" />
     <Compile Include="InvalidSampleTest.cs" />
@@ -54,6 +58,7 @@
     <Compile Include="Helpers\ApiDescriptionHelpers.cs" />
     <Compile Include="HelppageSampleGeneratorTest.cs" />
     <Compile Include="HelpControllerTest.cs" />
+    <Compile Include="WebConfigTest.cs" />
     <Compile Include="XmlDocumentationProviderTest.cs" />
     <Compile Include="HelpPageConfigurationExtensionsTest.cs" />
   </ItemGroup>
@@ -61,6 +66,11 @@
     <None Include="packages.config">
       <SubType>Designer</SubType>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\src\WebApiHelpPage\Areas\HelpPage\Views\Web.config">
+      <Link>TestFiles\Web.config</Link>
+    </EmbeddedResource>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\System.Net.Http.Formatting\System.Net.Http.Formatting.csproj">
@@ -108,8 +118,10 @@
       <Name>Microsoft.TestCommon</Name>
     </ProjectReference>
   </ItemGroup>
+  <ItemGroup>
+    <Service Include="{82A7F48D-3B50-4B1E-B82E-3ADA8210C358}" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <Import Project="$(SolutionDir)\.nuget\nuget.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.
   <Target Name="BeforeBuild">

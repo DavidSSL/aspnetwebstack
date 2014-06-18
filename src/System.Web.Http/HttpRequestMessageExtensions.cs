@@ -248,6 +248,7 @@ namespace System.Net.Http
             {
                 throw Error.ArgumentNull("request");
             }
+
             if (routeData == null)
             {
                 throw Error.ArgumentNull("routeData");
@@ -261,16 +262,6 @@ namespace System.Net.Http
             }
 
             request.Properties[HttpPropertyKeys.HttpRouteDataKey] = routeData;
-        }
-
-        internal static bool TryGetRouteData(this HttpRequestMessage request, out IHttpRouteData routeData)
-        {
-            if (request == null)
-            {
-                throw Error.ArgumentNull("request");
-            }
-
-            return request.Properties.TryGetValue<IHttpRouteData>(HttpPropertyKeys.HttpRouteDataKey, out routeData);
         }
 
         /// <summary>
@@ -813,7 +804,10 @@ namespace System.Net.Http
             {
                 // Uri --> FormData --> NVC
                 FormDataCollection formData = new FormDataCollection(uri);
-                queryString = formData.GetJQueryNameValuePairs();
+
+                // The ToArray call here avoids reparsing the query string, and avoids storing an Enumerator state
+                // machine in the request state.
+                queryString = formData.GetJQueryNameValuePairs().ToArray();
                 request.Properties.Add(HttpPropertyKeys.RequestQueryNameValuePairsKey, queryString);
             }
 

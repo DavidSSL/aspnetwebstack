@@ -1,13 +1,18 @@
 ﻿// Copyright (c) Microsoft Open Technologies, Inc. All rights reserved. See License.txt in the project root for license information.
 
 using System.Diagnostics.Contracts;
+using System.Threading;
 using System.Web.Hosting;
 using System.Web.WebPages;
+using Microsoft.Internal.Web.Utils;
 
 namespace System.Web.Mvc
 {
     public abstract class BuildManagerViewEngine : VirtualPathProviderViewEngine
     {
+        private static object _isPrecompiledNonUpdateableSiteInitializedLock = new object();
+        private static bool _isPrecompiledNonUpdateableSite;
+        private static bool _isPrecompiledNonUpdateableSiteInitialized;
         private static FileExistenceCache _sharedFileExistsCache;
 
         private IBuildManager _buildManager;
@@ -25,7 +30,8 @@ namespace System.Web.Mvc
         {
         }
 
-        internal BuildManagerViewEngine(IViewPageActivator viewPageActivator, IResolver<IViewPageActivator> activatorResolver, IDependencyResolver dependencyResolver, VirtualPathProvider pathProvider)
+        internal BuildManagerViewEngine(IViewPageActivator viewPageActivator, IResolver<IViewPageActivator> activatorResolver,
+            IDependencyResolver dependencyResolver, VirtualPathProvider pathProvider)
         {
             if (viewPageActivator != null)
             {
@@ -38,22 +44,21 @@ namespace System.Web.Mvc
                                                               new DefaultViewPageActivator(dependencyResolver),
                                                               "BuildManagerViewEngine constructor");
             }
+
             if (pathProvider != null)
             {
-                _fileExistsCache = new FileExistenceCache(pathProvider);
+                Func<VirtualPathProvider> providerFunc = () => pathProvider;
+                _fileExistsCache = new FileExistenceCache(providerFunc);
+                VirtualPathProviderFunc = providerFunc;
             }
             else
             {
                 if (_sharedFileExistsCache == null)
                 {
-                    VirtualPathProvider defaultPathProvider = HostingEnvironment.VirtualPathProvider;
-                    // Path provider may not be present in test context.
-                    if (defaultPathProvider != null)
-                    {
-                        // Startup initialization race is OK providing service remains read-only
-                        _sharedFileExistsCache = new FileExistenceCache(HostingEnvironment.VirtualPathProvider);
-                    }
+                    // Startup initialization race is OK providing service remains read-only
+                    _sharedFileExistsCache = new FileExistenceCache(() => HostingEnvironment.VirtualPathProvider);
                 }
+
                 _fileExistsCache = _sharedFileExistsCache;
             }
         }
@@ -84,10 +89,32 @@ namespace System.Web.Mvc
             }
         }
 
+        protected virtual bool IsPrecompiledNonUpdateableSite
+        {
+            get
+            {
+                return LazyInitializer.EnsureInitialized(ref _isPrecompiledNonUpdateableSite,
+                                                         ref _isPrecompiledNonUpdateableSiteInitialized,
+                                                         ref _isPrecompiledNonUpdateableSiteInitializedLock,
+                                                         GetPrecompiledNonUpdateable);
+            }
+        }
+
         protected override bool FileExists(ControllerContext controllerContext, string virtualPath)
         {
+            // When dealing with non-updateable precompiled views, the view files may not exist on disk. The correct
+            // way to check for existence of a file in this case is by querying the BuildManager.
+            // For all other scenarios, checking for files on disk is faster and should suffice.
             Contract.Assert(_fileExistsCache != null);
-            return _fileExistsCache.FileExists(virtualPath);
+            return _fileExistsCache.FileExists(virtualPath) ||
+                   (IsPrecompiledNonUpdateableSite && BuildManager.FileExists(virtualPath));
+        }
+
+        private static bool GetPrecompiledNonUpdateable()
+        {
+            IVirtualPathUtility virtualPathUtility = new VirtualPathUtilityWrapper();
+            return WebPages.BuildManagerWrapper.IsNonUpdateablePrecompiledApp(HostingEnvironment.VirtualPathProvider,
+                                                                              virtualPathUtility);
         }
 
         internal class DefaultViewPageActivator : IViewPageActivator
@@ -113,7 +140,22 @@ namespace System.Web.Mvc
 
             public object Create(ControllerContext controllerContext, Type type)
             {
-                return _resolverThunk().GetService(type) ?? Activator.CreateInstance(type);
+                try
+                {
+                    return _resolverThunk().GetService(type) ?? Activator.CreateInstance(type);
+                }
+                catch (MissingMethodException exception)
+                {
+                    // Ensure thrown exception contains the type name.  Might be down a few levels.
+                    MissingMethodException replacementException =
+                        TypeHelpers.EnsureDebuggableException(exception, type.FullName);
+                    if (replacementException != null)
+                    {
+                        throw replacementException;
+                    }
+
+                    throw;
+                }
             }
         }
     }

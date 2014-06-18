@@ -2,6 +2,7 @@
 
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Linq;
 using System.Net;
@@ -13,11 +14,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http.Controllers;
 using System.Web.Http.Dispatcher;
+using System.Web.Http.ExceptionHandling;
 using System.Web.Http.Filters;
 using System.Web.Http.Hosting;
+using System.Web.Http.Metadata;
 using System.Web.Http.ModelBinding;
 using System.Web.Http.Routing;
 using System.Web.Http.Services;
+using System.Web.Http.Validation;
 using Microsoft.TestCommon;
 using Moq;
 
@@ -486,119 +490,6 @@ namespace System.Web.Http
         }
 
         [Fact]
-        public void InvokeActionWithExceptionFilters_IfActionTaskIsSuccessful_ReturnsSuccessTask()
-        {
-            // Arrange
-            List<string> log = new List<string>();
-            var response = new HttpResponseMessage();
-            var actionResult = CreateStubActionResult(TaskHelpers.FromResult(response));
-            var exceptionFilterMock = CreateExceptionFilterMock((ec, ct) =>
-            {
-                log.Add("exceptionFilter");
-                return Task.Factory.StartNew(() => { });
-            });
-            var filters = new IExceptionFilter[] { exceptionFilterMock.Object };
-
-            // Act
-            var result = ApiController.InvokeActionWithExceptionFilters(actionResult, _actionContextInstance, CancellationToken.None, filters);
-
-            // Assert
-            Assert.NotNull(result);
-            result.WaitUntilCompleted();
-            Assert.Equal(TaskStatus.RanToCompletion, result.Status);
-            Assert.Same(response, result.Result);
-            Assert.Equal(new string[] { }, log.ToArray());
-        }
-
-        [Fact]
-        public void InvokeActionWithExceptionFilters_IfActionTaskIsCanceled_ReturnsCanceledTask()
-        {
-            // Arrange
-            List<string> log = new List<string>();
-            var actionResult = CreateStubActionResult(TaskHelpers.Canceled<HttpResponseMessage>());
-            var exceptionFilterMock = CreateExceptionFilterMock((ec, ct) =>
-            {
-                log.Add("exceptionFilter");
-                return Task.Factory.StartNew(() => { });
-            });
-            var filters = new IExceptionFilter[] { exceptionFilterMock.Object };
-
-            // Act
-            var result = ApiController.InvokeActionWithExceptionFilters(actionResult, _actionContextInstance, CancellationToken.None, filters);
-
-            // Assert
-            Assert.NotNull(result);
-            result.WaitUntilCompleted();
-            Assert.Equal(TaskStatus.Canceled, result.Status);
-            Assert.Equal(new string[] { "exceptionFilter" }, log.ToArray());
-        }
-
-        [Fact]
-        public void InvokeActionWithExceptionFilters_IfActionTaskIsFaulted_ExecutesFiltersAndReturnsFaultedTaskIfNotHandled()
-        {
-            // Arrange
-            List<string> log = new List<string>();
-            var exception = new Exception();
-            var actionResult = CreateStubActionResult(TaskHelpers.FromError<HttpResponseMessage>(exception));
-            Exception exceptionSeenByFilter = null;
-            var exceptionFilterMock = CreateExceptionFilterMock((ec, ct) =>
-            {
-                exceptionSeenByFilter = ec.Exception;
-                log.Add("exceptionFilter");
-                return Task.Factory.StartNew(() => { });
-            });
-            var filters = new IExceptionFilter[] { exceptionFilterMock.Object };
-
-            // Act
-            var result = ApiController.InvokeActionWithExceptionFilters(actionResult, _actionContextInstance, CancellationToken.None, filters);
-
-            // Assert
-            Assert.NotNull(result);
-            result.WaitUntilCompleted();
-            Assert.Equal(TaskStatus.Faulted, result.Status);
-            Assert.Same(exception, result.Exception.InnerException);
-            Assert.Same(exception, exceptionSeenByFilter);
-            Assert.Equal(new string[] { "exceptionFilter" }, log.ToArray());
-        }
-
-        [Fact]
-        public void InvokeActionWithExceptionFilters_IfActionTaskIsFaulted_ExecutesFiltersAndReturnsResultIfHandled()
-        {
-            // Arrange
-            List<string> log = new List<string>();
-            var exception = new Exception();
-            var actionResult = CreateStubActionResult(TaskHelpers.FromError<HttpResponseMessage>(exception));
-            HttpResponseMessage globalFilterResponse = new HttpResponseMessage();
-            HttpResponseMessage actionFilterResponse = new HttpResponseMessage();
-            HttpResponseMessage resultSeenByGlobalFilter = null;
-            var globalFilterMock = CreateExceptionFilterMock((ec, ct) =>
-            {
-                log.Add("globalFilter");
-                resultSeenByGlobalFilter = ec.Response;
-                ec.Response = globalFilterResponse;
-                return Task.Factory.StartNew(() => { });
-            });
-            var actionFilterMock = CreateExceptionFilterMock((ec, ct) =>
-            {
-                log.Add("actionFilter");
-                ec.Response = actionFilterResponse;
-                return Task.Factory.StartNew(() => { });
-            });
-            var filters = new IExceptionFilter[] { globalFilterMock.Object, actionFilterMock.Object };
-
-            // Act
-            var result = ApiController.InvokeActionWithExceptionFilters(actionResult, _actionContextInstance, CancellationToken.None, filters);
-
-            // Assert
-            Assert.NotNull(result);
-            result.WaitUntilCompleted();
-            Assert.Equal(TaskStatus.RanToCompletion, result.Status);
-            Assert.Same(globalFilterResponse, result.Result);
-            Assert.Same(actionFilterResponse, resultSeenByGlobalFilter);
-            Assert.Equal(new string[] { "actionFilter", "globalFilter" }, log.ToArray());
-        }
-
-        [Fact]
         public void ExecuteAsync_RunsExceptionFilter_WhenActionThrowsException()
         {
             // Arrange
@@ -727,6 +618,54 @@ namespace System.Web.Http
 
             // Assert
             Assert.Same(expectedException, actualException);
+        }
+
+        [Fact]
+        public void ExecuteAsync_IfActionThrows_CallsExceptionServicesFromConfiguration()
+        {
+            List<string> log = new List<string>();
+            Exception expectedException = new Exception();
+            ExceptionController controller = new ExceptionController(expectedException);
+
+            Mock<IExceptionLogger> exceptionLoggerMock = new Mock<IExceptionLogger>(MockBehavior.Strict);
+            exceptionLoggerMock
+                .Setup(h => h.LogAsync(It.IsAny<ExceptionLoggerContext>(), It.IsAny<CancellationToken>()))
+                .Returns<ExceptionLoggerContext, CancellationToken>((c, i) =>
+                {
+                    log.Add("logger");
+                    return Task.FromResult(0);
+                });
+            IExceptionLogger exceptionLogger = exceptionLoggerMock.Object;
+
+            Mock<IExceptionHandler> exceptionHandlerMock = new Mock<IExceptionHandler>(MockBehavior.Strict);
+            exceptionHandlerMock
+                .Setup(h => h.HandleAsync(It.IsAny<ExceptionHandlerContext>(), It.IsAny<CancellationToken>()))
+                .Returns<ExceptionHandlerContext, CancellationToken>((c, i) =>
+                {
+                    log.Add("handler");
+                    return Task.FromResult(0);
+                });
+            IExceptionHandler exceptionHandler = exceptionHandlerMock.Object;
+
+            HttpControllerContext controllerContext = ContextUtil.CreateControllerContext();
+
+            HttpControllerDescriptor controllerDescriptor = new HttpControllerDescriptor(
+                controllerContext.Configuration, "Get", typeof(ExceptionController));
+            controllerContext.ControllerDescriptor = controllerDescriptor;
+            controllerContext.Controller = controller;
+            controllerContext.Configuration.Services.Add(typeof(IExceptionLogger), exceptionLogger);
+            controllerContext.Configuration.Services.Replace(typeof(IExceptionHandler), exceptionHandler);
+            controllerContext.Configuration.Filters.Add(CreateStubExceptionFilter());
+
+            // Act
+            Task<HttpResponseMessage> task = controller.ExecuteAsync(controllerContext, CancellationToken.None);
+
+            // Assert
+            Assert.NotNull(task);
+            Assert.Equal(TaskStatus.Faulted, task.Status);
+            Assert.NotNull(task.Exception);
+            Assert.Same(expectedException, task.Exception.GetBaseException());
+            Assert.Equal(new string[] { "logger", "handler" }, log.ToArray());
         }
 
         [Fact]
@@ -1130,6 +1069,118 @@ namespace System.Web.Http
             Assert.Same(expectedPrincipal, context.Principal);
         }
 
+        [Fact]
+        public void Validate_ThrowsInvalidOperationException_IfConfigurationIsNull()
+        {
+            // Arrange
+            TestController controller = new TestController();
+            TestEntity entity = new TestEntity();
+
+            // Act & Assert
+            Assert.Throws<InvalidOperationException>(
+                () => controller.Validate(entity),
+                "ApiController.Configuration must not be null.");
+        }
+
+        [Fact]
+        public void Validate_DoesNothing_IfValidatorIsNull()
+        {
+            // Arrange
+            HttpConfiguration configuration = new HttpConfiguration();
+            configuration.Services.Replace(typeof(IBodyModelValidator), null);
+            TestEntity entity = new TestEntity { ID = 9999999 };
+
+            TestController controller = new TestController { Configuration = configuration };
+
+            // Act
+            controller.Validate(entity);
+
+            // Assert
+            Assert.True(controller.ModelState.IsValid);
+        }
+
+        [Fact]
+        [ReplaceCulture]
+        public void Validate_CallsValidateOnConfiguredValidator_UsingConfiguredMetadataProvider()
+        {
+            // Arrange
+            Mock<IBodyModelValidator> validator = new Mock<IBodyModelValidator>();
+            Mock<ModelMetadataProvider> metadataProvider = new Mock<ModelMetadataProvider>();
+
+            HttpConfiguration configuration = new HttpConfiguration();
+            configuration.Services.Replace(typeof(IBodyModelValidator), validator.Object);
+            configuration.Services.Replace(typeof(ModelMetadataProvider), metadataProvider.Object);
+
+            TestController controller = new TestController { Configuration = configuration };
+            TestEntity entity = new TestEntity { ID = 42 };
+
+            // Act
+            controller.Validate(entity);
+
+            // Assert
+            validator.Verify(
+                v => v.Validate(entity, typeof(TestEntity), metadataProvider.Object, controller.ActionContext, String.Empty),
+                Times.Once());
+            Assert.True(controller.ModelState.IsValid);
+        }
+
+        [Fact]
+        [ReplaceCulture]
+        public void Validate_SetsModelStateErrors_ForInvalidModels()
+        {
+            // Arrange
+            HttpConfiguration configuration = new HttpConfiguration();
+            TestController controller = new TestController { Configuration = configuration };
+            TestEntity entity = new TestEntity { ID = -1 };
+
+            // Act
+            controller.Validate(entity);
+
+            // Assert
+            Assert.False(controller.ModelState.IsValid);
+            Assert.Equal("The field ID must be between 0 and 100.", controller.ModelState["ID"].Errors[0].ErrorMessage);
+        }
+
+        [Fact]
+        [ReplaceCulture]
+        public void Validate_SetsModelStateErrorsUnderRightPrefix_ForInvalidModels()
+        {
+            // Arrange
+            HttpConfiguration configuration = new HttpConfiguration();
+            TestController controller = new TestController { Configuration = configuration };
+            TestEntity entity = new TestEntity { ID = -1 };
+
+            // Act
+            controller.Validate(entity, keyPrefix: "prefix");
+
+            // Assert
+            Assert.False(controller.ModelState.IsValid);
+            Assert.Equal("The field ID must be between 0 and 100.",
+                controller.ModelState["prefix.ID"].Errors[0].ErrorMessage);
+        }
+
+        [Fact]
+        public void Validate_DoesNotThrow_ForValidModels()
+        {
+            // Arrange
+            HttpConfiguration configuration = new HttpConfiguration();
+            TestController controller = new TestController { Configuration = configuration };
+            TestEntity entity = new TestEntity { ID = 42 };
+
+            // Act && Assert
+            Assert.DoesNotThrow(() => controller.Validate(entity));
+        }
+
+        private class TestController : ApiController
+        {
+        }
+
+        private class TestEntity
+        {
+            [Range(0, 100)]
+            public int ID { get; set; }
+        }
+
         private Mock<IAuthorizationFilter> CreateAuthorizationFilterMock(Func<HttpActionContext, CancellationToken, Func<Task<HttpResponseMessage>>, Task<HttpResponseMessage>> implementation)
         {
             Mock<IAuthorizationFilter> filterMock = new Mock<IAuthorizationFilter>();
@@ -1162,16 +1213,6 @@ namespace System.Web.Http
             return new Mock<IPrincipal>(MockBehavior.Strict).Object;
         }
 
-        private Mock<IExceptionFilter> CreateExceptionFilterMock(Func<HttpActionExecutedContext, CancellationToken, Task> implementation)
-        {
-            Mock<IExceptionFilter> filterMock = new Mock<IExceptionFilter>();
-            filterMock.Setup(f => f.ExecuteExceptionFilterAsync(It.IsAny<HttpActionExecutedContext>(),
-                                                                CancellationToken.None))
-                      .Returns(implementation)
-                      .Verifiable();
-            return filterMock;
-        }
-
         private static ApiController CreateFakeController()
         {
             return new ExceptionlessController();
@@ -1187,14 +1228,14 @@ namespace System.Web.Http
             return new HttpRequestContext();
         }
 
-        private IHttpActionResult CreateStubActionResult(Task<HttpResponseMessage> task)
+        private static IExceptionFilter CreateStubExceptionFilter()
         {
-            Mock<IHttpActionResult> actionResultMock = new Mock<IHttpActionResult>(MockBehavior.Strict);
-            actionResultMock.Setup(r => r.ExecuteAsync(It.IsAny<CancellationToken>())).Returns(() =>
-            {
-                return task;
-            });
-            return actionResultMock.Object;
+            Mock<IExceptionFilter> mock = new Mock<IExceptionFilter>(MockBehavior.Strict);
+            mock
+                .Setup(f => f.ExecuteExceptionFilterAsync(It.IsAny<HttpActionExecutedContext>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns(Task.FromResult(0));
+            return mock.Object;
         }
 
         private static Mock<DefaultServices> BuildFilterProvidingServicesMock(HttpConfiguration configuration, HttpActionDescriptor action, params FilterInfo[] filters)

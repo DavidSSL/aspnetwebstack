@@ -1,5 +1,8 @@
 ﻿// Copyright (c) Microsoft Open Technologies, Inc. All rights reserved. See License.txt in the project root for license information.
 
+using System.Collections;
+using System.Collections.Generic;
+using System.Web.Routing;
 using System.Web.WebPages.Html;
 using Microsoft.TestCommon;
 
@@ -147,6 +150,49 @@ namespace System.Web.WebPages.Test
             // Assert
             Assert.Equal("<b>boldFromObject</b>", markupHtml.ToString());
             Assert.Equal("<b>boldFromObject</b>", markupHtml.ToHtmlString());
+        }
+
+        [Fact]
+        public void ConvertsUnderscoresInNamesToDashes()
+        {
+            // Arrange
+            var attributes = GetAttributes();
+
+            // Act
+            RouteValueDictionary result = HtmlHelper.AnonymousObjectToHtmlAttributes(attributes);
+
+            // Assert
+            Assert.Equal(7, result.Count);
+            Assert.Equal("Bar", result["foo"]);
+            Assert.Equal("pow_wow", result["baz-bif"]);
+        }
+
+        [Fact]
+        public void ObjectToDictionaryWithAnonymousTypeLooksUpProperties()
+        {
+            // Arrange
+            object obj = new { _test = "value", oth_er = 1 };
+
+            // Act
+            IDictionary<string, object> dictValues = HtmlHelper.ObjectToDictionary(obj);
+
+            // Assert
+            Assert.NotNull(dictValues);
+            Assert.Equal(2, dictValues.Count);
+            Assert.Equal("value", dictValues["_test"]);
+            Assert.Equal(1, dictValues["oth_er"]);
+        }
+
+        private static object GetAttributes()
+        {
+            return new { foo = "Bar",
+                         baz_bif = "pow_wow",
+                         other1 = "xx",
+                         other2 = "yy",
+                         other3 = "zz",
+                         other4 = "aa",
+                         other5 = "bb",
+                       };
         }
 
         /// <summary>

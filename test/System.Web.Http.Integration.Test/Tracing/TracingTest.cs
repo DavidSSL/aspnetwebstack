@@ -52,10 +52,11 @@ namespace System.Web.Http.ModelBinding
         // We verify only the stable parts of the trace record, not the optional messages etc.
         public static List<ExpectedTraceRecord> ExpectedTraceRecords = new List<ExpectedTraceRecord>() {
             new ExpectedTraceRecord("System.Web.Http.Request",      string.Empty,                     string.Empty),
-            new ExpectedTraceRecord("System.Web.Http.MessageHandlers",  "DelegatingHandlerProxy",  "SendAsync"),
+            new ExpectedTraceRecord("System.Web.Http.MessageHandlers",  "DelegatingHandlerProxy",     "SendAsync"),
             new ExpectedTraceRecord("System.Web.Http.Controllers",  "DefaultHttpControllerSelector",  "SelectController"),
             new ExpectedTraceRecord("System.Web.Http.Controllers",  "HttpControllerDescriptor",       "CreateController"),
             new ExpectedTraceRecord("System.Web.Http.Controllers",  "DefaultHttpControllerActivator", "Create"),
+            new ExpectedTraceRecord("System.Web.Http.Controllers",  "DefaultHttpControllerTypeResolver", "GetControllerTypes"),
             new ExpectedTraceRecord("System.Web.Http.Controllers",  "ValuesController",               "ExecuteAsync"),
             new ExpectedTraceRecord("System.Web.Http.Action",       "ApiControllerActionSelector",    "SelectAction"),
             new ExpectedTraceRecord("System.Web.Http.Action",       "ApiControllerActionInvoker",     "InvokeActionAsync"),
@@ -72,6 +73,8 @@ namespace System.Web.Http.ModelBinding
             new ExpectedTraceRecord(TraceKind.Begin,     "System.Web.Http.Request",      string.Empty,                     string.Empty),
             new ExpectedTraceRecord(TraceKind.Begin,     "System.Web.Http.MessageHandlers",  "DelegatingHandlerProxy",  "SendAsync"),
             new ExpectedTraceRecord(TraceKind.Begin,     "System.Web.Http.Controllers",  "DefaultHttpControllerSelector",  "SelectController"),
+            new ExpectedTraceRecord(TraceKind.Begin,     "System.Web.Http.Controllers",  "DefaultHttpControllerTypeResolver", "GetControllerTypes"),
+            new ExpectedTraceRecord(TraceKind.End,       "System.Web.Http.Controllers",  "DefaultHttpControllerTypeResolver", "GetControllerTypes"),
             new ExpectedTraceRecord(TraceKind.End,       "System.Web.Http.Controllers",  "DefaultHttpControllerSelector",  "SelectController"),
             new ExpectedTraceRecord(TraceKind.Begin,     "System.Web.Http.Controllers",  "HttpControllerDescriptor",       "CreateController"),
             new ExpectedTraceRecord(TraceKind.Begin,     "System.Web.Http.Controllers",  "DefaultHttpControllerActivator", "Create"),

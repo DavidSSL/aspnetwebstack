@@ -41,7 +41,7 @@ namespace System.Web.Http.OData.Query.Validators
 
             // Act & Assert
             Assert.Throws<ODataException>(() => _validator.Validate(option, settings),
-                "Order by 'Name' is not allowed. To allow it, set the 'AllowedOrderByProperties' property on QueryableAttribute or QueryValidationSettings.");
+                "Order by 'Name' is not allowed. To allow it, set the 'AllowedOrderByProperties' property on EnableQueryAttribute or QueryValidationSettings.");
         }
 
         [Fact]
@@ -57,7 +57,7 @@ namespace System.Web.Http.OData.Query.Validators
 
             // Act & Assert
             Assert.Throws<ODataException>(() => _validator.Validate(option, settings),
-                "Order by 'Id' is not allowed. To allow it, set the 'AllowedOrderByProperties' property on QueryableAttribute or QueryValidationSettings.");
+                "Order by 'Id' is not allowed. To allow it, set the 'AllowedOrderByProperties' property on EnableQueryAttribute or QueryValidationSettings.");
         }
 
         [Fact]
@@ -106,7 +106,20 @@ namespace System.Web.Http.OData.Query.Validators
             // Act & Assert
             Assert.Throws<ODataException>(
                 () => _validator.Validate(option, settings),
-                "Order by '$it' is not allowed. To allow it, set the 'AllowedOrderByProperties' property on QueryableAttribute or QueryValidationSettings.");
+                "Order by '$it' is not allowed. To allow it, set the 'AllowedOrderByProperties' property on EnableQueryAttribute or QueryValidationSettings.");
+        }
+
+        [Fact]
+        public void Validate_ThrowsCountExceeded()
+        {
+            // Arrange
+            OrderByQueryOption option = new OrderByQueryOption("Name desc, Id asc", _context);
+            ODataValidationSettings settings = new ODataValidationSettings { MaxOrderByNodeCount = 1 };
+
+            // Act & Assert
+            Assert.Throws<ODataException>(
+                () => _validator.Validate(option, settings),
+                "The number of clauses in $orderby query option exceeded the maximum number allowed. The maximum number of $orderby clauses allowed is 1.");
         }
     }
 }

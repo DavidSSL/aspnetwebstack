@@ -6,7 +6,7 @@ using System.Web.Mvc.Properties;
 
 namespace System.Web.Mvc
 {
-    public class ReflectedActionDescriptor : ActionDescriptor
+    public class ReflectedActionDescriptor : ActionDescriptor, IMethodInfoActionDescriptor
     {
         private readonly string _actionName;
         private readonly ControllerDescriptor _controllerDescriptor;
@@ -130,6 +130,11 @@ namespace System.Web.Mvc
         public override ICollection<ActionSelector> GetSelectors()
         {
             return ActionDescriptorHelper.GetSelectors(MethodInfo);
+        }
+
+        internal override ICollection<ActionNameSelector> GetNameSelectors()
+        {
+            return ActionDescriptorHelper.GetNameSelectors(MethodInfo);
         }
 
         public override bool IsDefined(Type attributeType, bool inherit)
